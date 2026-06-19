@@ -54,7 +54,7 @@ type AccessCount struct {
 	ReqCount   int64  `gorm:"column:request_count" json:"request_count"`
 }
 
-type AccessLogRes struct {
+type AccessLogsRes struct {
 	AccessLogs []AccessCount `json:"access_logs"`
 }
 
@@ -225,5 +225,5 @@ func accessLogs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, list)
+	c.JSON(http.StatusOK, AccessLogsRes{ AccessLogs : list })
 }

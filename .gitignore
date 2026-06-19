@@ -14,3 +14,4 @@
 .direnv/
 
 vendor/
+/node_modules

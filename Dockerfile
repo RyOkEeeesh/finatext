@@ -15,6 +15,7 @@ FROM alpine:latest
 WORKDIR /app
 
 COPY --from=builder /app/main .
+COPY templates/ ./templates/
 RUN apk --no-cache add ca-certificates tzdata
 
 ENV TZ=Asia/Tokyo

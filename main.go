@@ -94,6 +94,7 @@ func main() {
 	initDB().AutoMigrate(&AccessLogs{})
 
 	r := gin.Default()
+	r.LoadHTMLGlob("templates/*")
 
 	r.GET("/", index)
 	r.GET("/address", addr)
@@ -103,9 +104,9 @@ func main() {
 }
 
 func index(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-    "message": "Welcome to Access Log API!",
-  })
+	c.HTML(http.StatusOK, "index.html", gin.H{
+		"title": "トップページ",
+	})
 }
 
 func addr(c *gin.Context) {

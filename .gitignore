@@ -1,16 +1,2 @@
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.prof
-
-/main
-/app
-
-.env
-.env.local
-.direnv/
-
-vendor/
+# deps
+node_modules/

@@ -125,10 +125,8 @@ async fn main() {
 
 // --- ハンドラ ---
 
-// トップページ (テンプレートエンジンの代わりに簡易的にHTMLを返却)
 async fn index() -> Html<&'static str> {
-    // 実際には Askama や minijinja 等を使ってファイルを読み込みます
-    Html("<h1>トップページ</h1>")
+    Html(include_str!("../templates/index.html"))
 }
 
 // アドレス検索

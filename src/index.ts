@@ -65,7 +65,7 @@ const saveAccessLog = async (postalCode: string) => {
 // --- ルーティング ---
 
 // 1. トップページ (r.LoadHTMLGlob の代用としてJSX/htmlタグを使用)
-app.use("/*", serveStatic({ root: "./public" }));
+app.use("/*", serveStatic({ root: "./templates" }));
 
 // 2. 住所検索API
 const addrReqSchema = z.object({

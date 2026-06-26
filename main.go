@@ -63,7 +63,7 @@ const apiUrl = "https://geoapi.heartrails.com/api/json?method=searchByPostal&pos
 const (
 	xt = 139.7673068
 	yt = 35.6809591
-	r = 6371.0
+	r  = 6371.0
 	// scaleX = 0.81226 // cos(35.68° * PI / 180)
 )
 
@@ -114,7 +114,7 @@ func addr(c *gin.Context) {
 
 	if err := c.ShouldBindQuery(&req); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Validation failed",
+			"error":   "Validation failed",
 			"details": err.Error(),
 		})
 		return
@@ -125,17 +125,17 @@ func addr(c *gin.Context) {
 	if err != nil {
 		go saveAccessLog(reqPostalCode)
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "location not found",
+			"error":   "location not found",
 			"details": err.Error(),
 		})
 		return
 	}
 
-	res := AddrRes {
+	res := AddrRes{
 		PostalCode: locations[0].PostalCode,
-		HitCount: len(locations),
-		Address: fmtAddr(locations[0]),
-		Distance: GetDistance(locations[0].X, locations[0].Y),
+		HitCount:   len(locations),
+		Address:    fmtAddr(locations[0]),
+		Distance:   GetDistance(locations[0].X, locations[0].Y),
 	}
 
 	if res.HitCount > 1 {
@@ -143,7 +143,7 @@ func addr(c *gin.Context) {
 			loc := locations[i]
 			res.Address = getCommonPrefix(res.Address, fmtAddr(loc))
 			dis := GetDistance(loc.X, loc.Y)
-			if  dis > res.Distance {
+			if dis > res.Distance {
 				res.Address = fmtAddr(loc)
 				res.Distance = dis
 			}
@@ -165,12 +165,12 @@ func getLocation(postalCode PostalCode) ([]Location, error) {
 	var apiRes PostalApiRes
 
 	if err := json.NewDecoder(resp.Body).Decode(&apiRes); err != nil {
-		return  nil, err
+		return nil, err
 	}
 
 	if len(apiRes.Response.Location) == 0 {
-    return nil, errors.New("location not found")
-  }
+		return nil, errors.New("location not found")
+	}
 
 	return apiRes.Response.Location, nil
 }
@@ -181,7 +181,7 @@ func getLocation(postalCode PostalCode) ([]Location, error) {
 // 	return (dx * dx) + (dy * dy)
 // }
 
-func fmtAddr(l Location) (string) {
+func fmtAddr(l Location) string {
 	return l.Prefecture + l.City + l.Town
 }
 
@@ -202,9 +202,9 @@ func getCommonPrefix(s1, s2 string) string {
 }
 
 func GetDistance(x, y float64) float64 {
-	term1 := (x - xt) * math.Cos(math.Pi * (y + yt) / 360.0)
+	term1 := (x - xt) * math.Cos(math.Pi*(y+yt)/360.0)
 	term2 := y - yt
-	val := (math.Pi * r / 180.0) * math.Sqrt((term1 * term1) + (term2 * term2))
+	val := (math.Pi * r / 180.0) * math.Sqrt((term1*term1)+(term2*term2))
 	return math.Round(val*10) / 10
 }
 
@@ -226,5 +226,5 @@ func accessLogs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, AccessLogsRes{ AccessLogs : list })
+	c.JSON(http.StatusOK, AccessLogsRes{AccessLogs: list})
 }

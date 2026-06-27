@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/allegro/bigcache/v3"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
@@ -90,8 +92,29 @@ func initDB() *gorm.DB {
 	return db
 }
 
+var cache *bigcache.BigCache
+const cacheKey = "access_logs_summary"
+
+func initCache() {
+	config := bigcache.Config{
+		Shards:             1024,
+		LifeWindow:         10 * time.Second,
+		CleanWindow:        5 * time.Minute,
+		MaxEntriesInWindow: 1000 * 10 * 60,
+		MaxEntrySize:       500,
+		Verbose:            false,
+	}
+
+	var err error
+	cache, err = bigcache.New(context.Background(), config)
+	if err != nil {
+		panic(err)
+	}
+}
+
 func main() {
 	initDB().AutoMigrate(&AccessLogs{})
+	initCache()
 
 	r := gin.Default()
 	r.LoadHTMLGlob("templates/*")
@@ -209,22 +232,39 @@ func GetDistance(x, y float64) float64 {
 }
 
 func saveAccessLog(postal PostalCode) {
-	db.Create(&AccessLogs{PostalCode: postal})
+  db.Create(&AccessLogs{PostalCode: postal})
+
+  if cache != nil {
+    _ = cache.Delete(cacheKey)
+  }
 }
 
 func accessLogs(c *gin.Context) {
-	var list []AccessCount
+  if cachedData, err := cache.Get(cacheKey); err == nil {
+    var res AccessLogsRes
+    if err := json.Unmarshal(cachedData, &res); err == nil {
+      c.JSON(http.StatusOK, res)
+      return
+    }
+  }
 
-	err := db.Model(&AccessLogs{}).
-		Select("postal_code, count(*) as request_count").
-		Group("postal_code").
-		Order("request_count DESC").
-		Scan(&list).Error
+  var list []AccessCount
+  err := db.Model(&AccessLogs{}).
+    Select("postal_code, count(*) as request_count").
+    Group("postal_code").
+    Order("request_count DESC").
+    Scan(&list).Error
 
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+  if err != nil {
+    c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+    return
+  }
 
-	c.JSON(http.StatusOK, AccessLogsRes{AccessLogs: list})
+  res := AccessLogsRes{AccessLogs: list}
+
+  if jsonData, err := json.Marshal(res); err == nil {
+    _ = cache.Set(cacheKey, jsonData)
+  }
+
+  c.JSON(http.StatusOK, res)
 }

@@ -198,12 +198,6 @@ func getLocation(postalCode PostalCode) ([]Location, error) {
 	return apiRes.Response.Location, nil
 }
 
-// func GetDistanceScore(x, y float64) float64 {
-// 	dx := (x - xt) * scaleX
-// 	dy := y - yt
-// 	return (dx * dx) + (dy * dy)
-// }
-
 func fmtAddr(l Location) string {
 	return l.Prefecture + l.City + l.Town
 }

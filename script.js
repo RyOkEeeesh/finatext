@@ -11,10 +11,10 @@ export const options = {
 
 const counter = new Count();
 
-const endpoint = __ENV.ENDPOINT;
+const endpoint = __ENV.ENDPOINT || '';
 
 export default function () {
-  const res = http.get(`http://${__ENV.HOST || 'localhost'}/${endpoint}`);
+  const res = http.get(`http://${__ENV.HOST || 'localhost'}:8080/${endpoint}`);
   counter.addCount(res.timings.duration);
 }
 

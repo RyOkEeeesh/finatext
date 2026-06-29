@@ -4,19 +4,24 @@ import { summaryTrendStats } from './src/lib.js';
 import { Count } from './src/class.js';
 
 export const options = {
-  vus: 1000,
-  duration: '30s',
+  vus: 10,
+  duration: '10s', 
   summaryTrendStats,
 };
 
 const counter = new Count();
 
+const endpoint = __ENV.ENDPOINT;
+
 export default function () {
-  const res = http.get('https://google.com');
-  const d = res.timings.duration;
-  counter.addCount(d)
+  const res = http.get(`http://${__ENV.HOST || 'localhost'}/${endpoint}`);
+  counter.addCount(res.timings.duration);
 }
 
 export function handleSummary(data) {
-  return makeMarkdownSummary(data);
+  const vus = __ENV.VUS || options.vus;
+  const duration = __ENV.DURATION || options.duration;
+  
+  const reportName = `${endpoint}_${vus}_${duration}`;
+  return makeMarkdownSummary(data, reportName);
 }

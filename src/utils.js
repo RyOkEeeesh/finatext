@@ -58,10 +58,8 @@ xychart-beta
 \`\`\`
 `;
 
-  const time = new Date().toISOString().replace(/:/g, '-');
-  
   return {
-    [`tests/${testName}_${time}.md`]: markdown,
+    [`tests/${testName}.md`]: markdown,
     'stdout': textSummary(data, { indent: ' ', enableColors: true }),
   };
 }

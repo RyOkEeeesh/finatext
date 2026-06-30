@@ -187,11 +187,7 @@ func fmtAddr(l Location) string {
 func getCommonPrefix(s1, s2 string) string {
 	r1 := []rune(s1)
 	r2 := []rune(s2)
-
-	minLen := len(r1)
-	if len(r2) < minLen {
-		minLen = len(r2)
-	}
+	minLen := min(len(r1), len(r2))
 
 	i := 0
 	for i < minLen && r1[i] == r2[i] {

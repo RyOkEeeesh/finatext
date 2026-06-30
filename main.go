@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/allegro/bigcache/v3"
@@ -92,7 +93,13 @@ func initDB() *gorm.DB {
 }
 
 var cache *bigcache.BigCache
+
 const cacheKey = "access_logs_summary"
+
+var (
+	logBuffer   = make(map[PostalCode]int)
+	bufferMutex sync.Mutex
+)
 
 func initCache() {
 	config := bigcache.Config{
@@ -115,12 +122,14 @@ func main() {
 	initDB().AutoMigrate(&AccessLogs{})
 	initCache()
 
+	go startLogFlusher(30 * time.Second)
+
 	r := gin.Default()
 	r.LoadHTMLGlob("templates/*")
 
 	r.GET("/", index)
 	r.GET("/address", addr)
-	r.GET("/access_logs", accessLogs)
+	r.GET("/address/access_logs", accessLogs)
 
 	r.Run(":8080")
 }
@@ -135,7 +144,7 @@ func addr(c *gin.Context) {
 	var req AddrReq
 
 	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Validation failed",
 			"details": err.Error(),
 		})
@@ -145,7 +154,7 @@ func addr(c *gin.Context) {
 	reqPostalCode := req.PostalCode
 	locations, err := getLocation(reqPostalCode)
 	if err != nil {
-		go saveAccessLog(reqPostalCode)
+		enqueueAccessLog(reqPostalCode)
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "location not found",
 			"details": err.Error(),
@@ -154,25 +163,31 @@ func addr(c *gin.Context) {
 	}
 
 	res := AddrRes{
-		PostalCode: locations[0].PostalCode,
+		PostalCode: reqPostalCode,
 		HitCount:   len(locations),
 		Address:    fmtAddr(locations[0]),
 		Distance:   GetDistance(locations[0].X, locations[0].Y),
 	}
 
 	if res.HitCount > 1 {
+		commonAddr := fmtAddr(locations[0])
+		maxDistance := res.Distance
+
 		for i := 1; i < res.HitCount; i++ {
 			loc := locations[i]
-			res.Address = getCommonPrefix(res.Address, fmtAddr(loc))
+			commonAddr = getCommonPrefix(commonAddr, fmtAddr(loc))
+
 			dis := GetDistance(loc.X, loc.Y)
-			if dis > res.Distance {
-				res.Address = fmtAddr(loc)
-				res.Distance = dis
+			if dis > maxDistance {
+				maxDistance = dis
 			}
 		}
+
+		res.Address = commonAddr
+		res.Distance = maxDistance
 	}
 
-	go saveAccessLog(reqPostalCode)
+	enqueueAccessLog(reqPostalCode)
 	c.JSON(http.StatusOK, res)
 }
 
@@ -204,11 +219,7 @@ func fmtAddr(l Location) string {
 func getCommonPrefix(s1, s2 string) string {
 	r1 := []rune(s1)
 	r2 := []rune(s2)
-
-	minLen := len(r1)
-	if len(r2) < minLen {
-		minLen = len(r2)
-	}
+	minLen := min(len(r1), len(r2))
 
 	i := 0
 	for i < minLen && r1[i] == r2[i] {
@@ -224,40 +235,81 @@ func GetDistance(x, y float64) float64 {
 	return math.Round(val*10) / 10
 }
 
-func saveAccessLog(postal PostalCode) {
-  db.Create(&AccessLogs{PostalCode: postal})
+func enqueueAccessLog(postal PostalCode) {
+	bufferMutex.Lock()
+	logBuffer[postal]++
+	bufferMutex.Unlock()
 
-  if cache != nil {
-    _ = cache.Delete(cacheKey)
-  }
+	if cache != nil {
+		_ = cache.Delete(cacheKey)
+	}
+}
+
+func flushLogsToDB() {
+	bufferMutex.Lock()
+	if len(logBuffer) == 0 {
+		bufferMutex.Unlock()
+		return
+	}
+
+	currentLogs := logBuffer
+	logBuffer = make(map[PostalCode]int)
+	bufferMutex.Unlock()
+
+	var logsToInsert []AccessLogs
+	now := time.Now()
+
+	for postal, count := range currentLogs {
+		for i := 0; i < count; i++ {
+			logsToInsert = append(logsToInsert, AccessLogs{
+				PostalCode: postal,
+				CreatedAt:  now,
+			})
+		}
+	}
+
+	if len(logsToInsert) > 0 {
+		if err := db.Create(&logsToInsert).Error; err != nil {
+			fmt.Fprintf(os.Stderr, "ログのバルクインサートに失敗しました: %v\n", err)
+		}
+	}
+}
+
+func startLogFlusher(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	for range ticker.C {
+		flushLogsToDB()
+	}
 }
 
 func accessLogs(c *gin.Context) {
-  if cachedData, err := cache.Get(cacheKey); err == nil {
-    var res AccessLogsRes
-    if err := json.Unmarshal(cachedData, &res); err == nil {
-      c.JSON(http.StatusOK, res)
-      return
-    }
-  }
+	flushLogsToDB()
 
-  var list []AccessCount
-  err := db.Model(&AccessLogs{}).
-    Select("postal_code, count(*) as request_count").
-    Group("postal_code").
-    Order("request_count DESC").
-    Scan(&list).Error
+	if cachedData, err := cache.Get(cacheKey); err == nil {
+		var res AccessLogsRes
+		if err := json.Unmarshal(cachedData, &res); err == nil {
+			c.JSON(http.StatusOK, res)
+			return
+		}
+	}
 
-  if err != nil {
-    c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-    return
-  }
+	var list []AccessCount
+	err := db.Model(&AccessLogs{}).
+		Select("postal_code, count(*) as request_count").
+		Group("postal_code").
+		Order("request_count DESC").
+		Scan(&list).Error
 
-  res := AccessLogsRes{AccessLogs: list}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
-  if jsonData, err := json.Marshal(res); err == nil {
-    _ = cache.Set(cacheKey, jsonData)
-  }
+	res := AccessLogsRes{AccessLogs: list}
 
-  c.JSON(http.StatusOK, res)
+	if jsonData, err := json.Marshal(res); err == nil {
+		_ = cache.Set(cacheKey, jsonData)
+	}
+
+	c.JSON(http.StatusOK, res)
 }

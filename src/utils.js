@@ -59,7 +59,7 @@ xychart-beta
 `;
 
   return {
-    [`tests/${testName}.md`]: markdown,
+    [`tests/${testName.replace('/', '-')}.md`]: markdown,
     'stdout': textSummary(data, { indent: ' ', enableColors: true }),
   };
 }

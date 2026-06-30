@@ -64,7 +64,6 @@ const (
 	xt = 139.7673068
 	yt = 35.6809591
 	r  = 6371.0
-	// scaleX = 0.81226 // cos(35.68° * PI / 180)
 )
 
 var db *gorm.DB
@@ -98,14 +97,14 @@ func main() {
 
 	r.GET("/", index)
 	r.GET("/address", addr)
-	r.GET("/access_logs", accessLogs)
+	r.GET("/address/access_logs", accessLogs)
 
 	r.Run(":8080")
 }
 
 func index(c *gin.Context) {
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"title": "トップページ",
+		"title": "トップページ",
 	})
 }
 
@@ -113,7 +112,7 @@ func addr(c *gin.Context) {
 	var req AddrReq
 
 	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Validation failed",
 			"details": err.Error(),
 		})
@@ -132,22 +131,28 @@ func addr(c *gin.Context) {
 	}
 
 	res := AddrRes{
-		PostalCode: locations[0].PostalCode,
+		PostalCode: reqPostalCode,
 		HitCount:   len(locations),
 		Address:    fmtAddr(locations[0]),
 		Distance:   GetDistance(locations[0].X, locations[0].Y),
 	}
 
 	if res.HitCount > 1 {
+		commonAddr := fmtAddr(locations[0])
+		maxDistance := res.Distance
+
 		for i := 1; i < res.HitCount; i++ {
 			loc := locations[i]
-			res.Address = getCommonPrefix(res.Address, fmtAddr(loc))
+			commonAddr = getCommonPrefix(commonAddr, fmtAddr(loc))
+
 			dis := GetDistance(loc.X, loc.Y)
-			if dis > res.Distance {
-				res.Address = fmtAddr(loc)
-				res.Distance = dis
+			if dis > maxDistance {
+				maxDistance = dis
 			}
 		}
+
+		res.Address = commonAddr
+		res.Distance = maxDistance
 	}
 
 	go saveAccessLog(reqPostalCode)
@@ -174,12 +179,6 @@ func getLocation(postalCode PostalCode) ([]Location, error) {
 
 	return apiRes.Response.Location, nil
 }
-
-// func GetDistanceScore(x, y float64) float64 {
-// 	dx := (x - xt) * scaleX
-// 	dy := y - yt
-// 	return (dx * dx) + (dy * dy)
-// }
 
 func fmtAddr(l Location) string {
 	return l.Prefecture + l.City + l.Town

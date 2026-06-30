@@ -269,7 +269,7 @@ func flushLogsToDB() {
 	}
 
 	if len(logsToInsert) > 0 {
-		if err := db.Create(&logsToInsert).Error; err != nil {
+		if err := db.CreateInBatches(&logsToInsert, 2000).Error; err != nil {
 			fmt.Fprintf(os.Stderr, "ログのバルクインサートに失敗しました: %v\n", err)
 		}
 	}

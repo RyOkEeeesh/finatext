@@ -16,15 +16,16 @@ export class Count {
 
   constructor() { }
 
-  addCount(d) {
-    if (d <= 50) this.counts[0].add(1);
-    else if (d <= 100) this.counts[1].add(1);
-    else if (d <= 150) this.counts[2].add(1);
-    else if (d <= 200) this.counts[3].add(1);
-    else if (d <= 250) this.counts[4].add(1);
-    else if (d <= 300) this.counts[5].add(1);
-    else if (d <= 350) this.counts[6].add(1);
-    else if (d <= 400) this.counts[7].add(1);
-    else this.counts[8].add(1);
+  // ★修正: 第2引数で tags を受け取るように拡張
+  addCount(d, tags = {}) {
+    if (d <= 50) this.counts[0].add(1, tags);
+    else if (d <= 100) this.counts[1].add(1, tags);
+    else if (d <= 150) this.counts[2].add(1, tags);
+    else if (d <= 200) this.counts[3].add(1, tags);
+    else if (d <= 250) this.counts[4].add(1, tags);
+    else if (d <= 300) this.counts[5].add(1, tags);
+    else if (d <= 350) this.counts[6].add(1, tags);
+    else if (d <= 400) this.counts[7].add(1, tags);
+    else this.counts[8].add(1, tags);
   }
 }

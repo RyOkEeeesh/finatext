@@ -16,5 +16,7 @@
 vendor/
 /node_modules
 /target
-finatext
 /tests
+address_mixed_test.js
+test.js
+finatext

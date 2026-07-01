@@ -3,6 +3,7 @@ module finatext
 go 1.26.4
 
 require (
+	github.com/allegro/bigcache/v3 v3.1.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/joho/godotenv v1.5.1
 	gorm.io/driver/postgres v1.6.0

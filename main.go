@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
+	"github.com/allegro/bigcache/v3"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
@@ -89,8 +92,37 @@ func initDB() *gorm.DB {
 	return db
 }
 
+var cache *bigcache.BigCache
+
+const cacheKey = "access_logs_summary"
+
+var (
+	logBuffer   = make(map[PostalCode]int)
+	bufferMutex sync.Mutex
+)
+
+func initCache() {
+	config := bigcache.Config{
+		Shards:             1024,
+		LifeWindow:         10 * time.Second,
+		CleanWindow:        5 * time.Minute,
+		MaxEntriesInWindow: 1000 * 10 * 60,
+		MaxEntrySize:       500,
+		Verbose:            false,
+	}
+
+	var err error
+	cache, err = bigcache.New(context.Background(), config)
+	if err != nil {
+		panic(err)
+	}
+}
+
 func main() {
 	initDB().AutoMigrate(&AccessLogs{})
+	initCache()
+
+	go startLogFlusher(30 * time.Second)
 
 	r := gin.Default()
 	r.LoadHTMLGlob("templates/*")
@@ -122,7 +154,7 @@ func addr(c *gin.Context) {
 	reqPostalCode := req.PostalCode
 	locations, err := getLocation(reqPostalCode)
 	if err != nil {
-		go saveAccessLog(reqPostalCode)
+		enqueueAccessLog(reqPostalCode)
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "location not found",
 			"details": err.Error(),
@@ -155,7 +187,7 @@ func addr(c *gin.Context) {
 		res.Distance = maxDistance
 	}
 
-	go saveAccessLog(reqPostalCode)
+	enqueueAccessLog(reqPostalCode)
 	c.JSON(http.StatusOK, res)
 }
 
@@ -203,13 +235,65 @@ func GetDistance(x, y float64) float64 {
 	return math.Round(val*10) / 10
 }
 
-func saveAccessLog(postal PostalCode) {
-	db.Create(&AccessLogs{PostalCode: postal})
+func enqueueAccessLog(postal PostalCode) {
+	bufferMutex.Lock()
+	logBuffer[postal]++
+	bufferMutex.Unlock()
+
+	if cache != nil {
+		_ = cache.Delete(cacheKey)
+	}
+}
+
+func flushLogsToDB() {
+	bufferMutex.Lock()
+	if len(logBuffer) == 0 {
+		bufferMutex.Unlock()
+		return
+	}
+
+	currentLogs := logBuffer
+	logBuffer = make(map[PostalCode]int)
+	bufferMutex.Unlock()
+
+	var logsToInsert []AccessLogs
+	now := time.Now()
+
+	for postal, count := range currentLogs {
+		for i := 0; i < count; i++ {
+			logsToInsert = append(logsToInsert, AccessLogs{
+				PostalCode: postal,
+				CreatedAt:  now,
+			})
+		}
+	}
+
+	if len(logsToInsert) > 0 {
+		if err := db.CreateInBatches(&logsToInsert, 2000).Error; err != nil {
+			fmt.Fprintf(os.Stderr, "ログのバルクインサートに失敗しました: %v\n", err)
+		}
+	}
+}
+
+func startLogFlusher(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	for range ticker.C {
+		flushLogsToDB()
+	}
 }
 
 func accessLogs(c *gin.Context) {
-	var list []AccessCount
+	flushLogsToDB()
 
+	if cachedData, err := cache.Get(cacheKey); err == nil {
+		var res AccessLogsRes
+		if err := json.Unmarshal(cachedData, &res); err == nil {
+			c.JSON(http.StatusOK, res)
+			return
+		}
+	}
+
+	var list []AccessCount
 	err := db.Model(&AccessLogs{}).
 		Select("postal_code, count(*) as request_count").
 		Group("postal_code").
@@ -221,5 +305,11 @@ func accessLogs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, AccessLogsRes{AccessLogs: list})
+	res := AccessLogsRes{AccessLogs: list}
+
+	if jsonData, err := json.Marshal(res); err == nil {
+		_ = cache.Set(cacheKey, jsonData)
+	}
+
+	c.JSON(http.StatusOK, res)
 }

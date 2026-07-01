@@ -4,11 +4,21 @@ import { z } from "zod";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { desc, sql } from "drizzle-orm";
-import { html } from "hono/html";
 import { serveStatic } from "hono/bun";
+import { LRUCache } from "lru-cache";
+import { serve } from "bun";
 
 import { accessLogs } from "./DB/schema";
-import { serve } from "bun";
+
+// --- 型定義 ---
+interface Location {
+  prefecture: string;
+  city: string;
+  town: string;
+  x: string;
+  y: string;
+  postal: string;
+}
 
 const queryClient = postgres({
   host: process.env.DB_HOST,
@@ -27,6 +37,57 @@ const XT = 139.7673068;
 const YT = 35.6809591;
 const R = 6371.0;
 
+// --- キャッシュの設定 ---
+const CACHE_KEY = "access_logs_summary";
+const cache = new LRUCache<string, string>({
+  max: 100,
+  ttl: 10 * 1000, // 10秒 (Goの LifeWindow)
+});
+
+// --- ログバッファリングの実実装 ---
+// JSはシングルスレッド（イベントループ）で動作するため、Mutexによる排他制御は不要です
+let logBuffer = new Map<string, number>();
+
+const enqueueAccessLog = (postalCode: string) => {
+  logBuffer.set(postalCode, (logBuffer.get(postalCode) || 0) + 1);
+
+  // 新しいログがキューに入ったらキャッシュを即時削除 (Goの cache.Delete を再現)
+  cache.delete(CACHE_KEY);
+};
+
+const flushLogsToDB = async () => {
+  if (logBuffer.size === 0) return;
+
+  // 現在のバッファを退避させてクリア
+  const currentLogs = Array.from(logBuffer.entries());
+  logBuffer.clear();
+
+  const logsToInsert: { postalCode: string; createdAt: Date }[] = [];
+  const now = new Date();
+
+  for (const [postalCode, count] of currentLogs) {
+    for (let i = 0; i < count; i++) {
+      logsToInsert.push({ postalCode, createdAt: now });
+    }
+  }
+
+  if (logsToInsert.length > 0) {
+    try {
+      // 2000件ずつのチャンクに分けてバルクインサート (Goの CreateInBatches を再現)
+      const chunkSize = 2000;
+      for (let i = 0; i < logsToInsert.length; i += chunkSize) {
+        const chunk = logsToInsert.slice(i, i + chunkSize);
+        await db.insert(accessLogs).values(chunk);
+      }
+    } catch (e) {
+      console.error("ログのバルクインサートに失敗しました:", e);
+    }
+  }
+};
+
+// 30秒ごとに定期フラッシュ (Goの startLogFlusher を再現)
+setInterval(flushLogsToDB, 30 * 1000);
+
 // --- ヘルパー関数 ---
 const getDistance = (x: number, y: number): number => {
   const term1 = (x - XT) * Math.cos((Math.PI * (y + YT)) / 360.0);
@@ -36,11 +97,10 @@ const getDistance = (x: number, y: number): number => {
   return Math.round(val * 10) / 10;
 };
 
-const fmtAddr = (l: any): string => {
+const fmtAddr = (l: Location): string => {
   return `${l.prefecture}${l.city}${l.town}`;
 };
 
-// []runeによるスライス処理をJavaScriptのArray.from()で再現（サロゲートペア対策）
 const getCommonPrefix = (s1: string, s2: string): string => {
   const r1 = Array.from(s1);
   const r2 = Array.from(s2);
@@ -53,18 +113,9 @@ const getCommonPrefix = (s1: string, s2: string): string => {
   return r1.slice(0, i).join("");
 };
 
-// go saveAccessLog() の代替となる非同期関数
-const saveAccessLog = async (postalCode: string) => {
-  try {
-    await db.insert(accessLogs).values({ postalCode });
-  } catch (e) {
-    console.error("Access log save error:", e);
-  }
-};
-
 // --- ルーティング ---
 
-// 1. トップページ (r.LoadHTMLGlob の代用としてJSX/htmlタグを使用)
+// 1. トップページ
 app.use("/*", serveStatic({ root: "./templates" }));
 
 // 2. 住所検索API
@@ -79,11 +130,10 @@ const addrReqSchema = z.object({
 app.get(
   "/address",
   zValidator("query", addrReqSchema, (result, c) => {
-    // Ginの c.ShouldBindQuery 失敗時の挙動を再現
     if (!result.success) {
       return c.json(
         { error: "Validation failed", details: result.error.message },
-        404,
+        400, // Goに合わせて BadRequest(400) に修正
       );
     }
   }),
@@ -93,43 +143,46 @@ app.get(
     try {
       const resp = await fetch(API_URL + postal_code);
       const apiRes = await resp.json();
-      const locations = apiRes.response?.location;
+      const locations: Location[] = apiRes.response?.location;
 
       if (!locations || locations.length === 0) {
-        saveAccessLog(postal_code); // awaitせずに流し放しにする（ゴルーチン的な挙動）
+        enqueueAccessLog(postal_code);
         return c.json(
           { error: "location not found", details: "location not found" },
           404,
         );
       }
 
-      let res = {
-        postal_code: locations[0].postal,
-        hit_count: locations.length,
-        address: fmtAddr(locations[0]),
-        tokyo_sta_distance: getDistance(
-          parseFloat(locations[0].x),
-          parseFloat(locations[0].y),
-        ),
-      };
+      // 複数ヒット時のロジック修正（共通接頭辞の維持と最大距離の算出）
+      let commonAddress = fmtAddr(locations[0]);
+      let maxDistance = getDistance(
+        parseFloat(locations[0].x),
+        parseFloat(locations[0].y),
+      );
 
-      if (res.hit_count > 1) {
-        for (let i = 1; i < res.hit_count; i++) {
+      if (locations.length > 1) {
+        for (let i = 1; i < locations.length; i++) {
           const loc = locations[i];
-          res.address = getCommonPrefix(res.address, fmtAddr(loc));
+          commonAddress = getCommonPrefix(commonAddress, fmtAddr(loc));
           const dis = getDistance(parseFloat(loc.x), parseFloat(loc.y));
 
-          if (dis > res.tokyo_sta_distance) {
-            res.address = fmtAddr(loc);
-            res.tokyo_sta_distance = dis;
+          if (dis > maxDistance) {
+            maxDistance = dis;
           }
         }
       }
 
-      saveAccessLog(postal_code);
+      const res = {
+        postal_code: locations[0].postal,
+        hit_count: locations.length,
+        address: commonAddress,
+        tokyo_sta_distance: maxDistance,
+      };
+
+      enqueueAccessLog(postal_code);
       return c.json(res, 200);
     } catch (error: any) {
-      saveAccessLog(postal_code);
+      enqueueAccessLog(postal_code);
       return c.json(
         { error: "location not found", details: error.message },
         404,
@@ -138,20 +191,33 @@ app.get(
   },
 );
 
-// 3. アクセスログ集計API
-app.get("/access_logs", async (c) => {
+// 3. アクセスログ集計API (パスをGoの `/address/access_logs` に修正)
+app.get("/address/access_logs", async (c) => {
+  // 検索前に現在のバッファを強制フラッシュ (Goの flushLogsToDB() を再現)
+  await flushLogsToDB();
+
+  // キャッシュの確認
+  const cachedData = cache.get(CACHE_KEY);
+  if (cachedData) {
+    return c.json(JSON.parse(cachedData), 200);
+  }
+
   try {
     const list = await db
       .select({
         postal_code: accessLogs.postalCode,
-        // count(*) は文字列で返ってくることがあるためNumberにキャスト
         request_count: sql<number>`count(*)`.mapWith(Number),
       })
       .from(accessLogs)
       .groupBy(accessLogs.postalCode)
       .orderBy(desc(sql`count(*)`));
 
-    return c.json({ access_logs: list }, 200);
+    const res = { access_logs: list };
+
+    // キャッシュに保存
+    cache.set(CACHE_KEY, JSON.stringify(res));
+
+    return c.json(res, 200);
   } catch (error: any) {
     return c.json({ error: error.message }, 500);
   }

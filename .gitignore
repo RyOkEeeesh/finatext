@@ -1,6 +1,6 @@
-tests/*
 env.js
 .env
 main
 address_mixed_test.js
 test.js
+/.venv

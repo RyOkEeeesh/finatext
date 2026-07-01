@@ -11,7 +11,7 @@ const ENDPOINTS = [
   'address/access_logs',
 ];
 
-const runK6 = (endpoint, vus) => 
+const runNormal = (endpoint, vus) => 
   new Promise((resolve, reject) => {
     const args = [
       'run',

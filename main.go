@@ -136,7 +136,7 @@ func main() {
 
 func index(c *gin.Context) {
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"title": "トップページ",
+		"title": "トップページ",
 	})
 }
 

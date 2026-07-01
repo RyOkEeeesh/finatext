@@ -1,7 +1,22 @@
-# deps
-node_modules/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.prof
+
+/main
+/app
+
 .env
+.env.local
+.direnv/
 
-# Added by cargo
-
+vendor/
+/node_modules
 /target
+/tests
+address_mixed_test.js
+test.js
+finatext

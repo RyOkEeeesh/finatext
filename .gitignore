@@ -16,3 +16,6 @@
 vendor/
 /node_modules
 /target
+/tests
+address_mixed_test.js
+test.js

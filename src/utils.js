@@ -21,14 +21,18 @@ export function makeEndpointSection(title, durationMetric, failedMetric, reqsMet
   const p9999 = duration[p_9999] || 0;
 
   const getSubHist = (histKey) => metricsAll[histKey] ? metricsAll[histKey].values.count : 0;
+  const rpsRow = reqsMetric ? `| 毎秒リクエスト数 | ${requestsPerSec}/sec |\n` : '';
 
   return `
-### ${title}
-成功率:      ${successRate}%
-最遅:        ${(duration.max).toFixed(4)} ms
-最速:        ${(duration.min).toFixed(4)} ms
-平均:        ${(duration.avg).toFixed(4)} ms
-${reqsMetric ? `毎秒リクエスト数:   ${requestsPerSec}/sec` : ''}
+  ### ${title}
+
+| 項目 | 結果 |
+| :--- | :--- |
+| 成功率 | ${successRate}% |
+| 最遅 | ${(duration.max).toFixed(4)} ms |
+| 最速 | ${(duration.min).toFixed(4)} ms |
+| 平均 | ${(duration.avg).toFixed(4)} ms |
+${rpsRow}
 
 \`\`\`mermaid
 xychart-beta

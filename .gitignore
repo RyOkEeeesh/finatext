@@ -20,3 +20,4 @@ vendor/
 address_mixed_test.js
 test.js
 finatext
+.DS_Store
